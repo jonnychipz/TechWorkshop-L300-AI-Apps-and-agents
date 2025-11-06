@@ -1,17 +1,13 @@
-name: Deploy to Azure Container Registry
+name: Build and Deploy to Azure Container Registry
 
 on:
   push:
     branches:
       - main
-    paths:
-      - 'src/**'
 
 env:
-  AZURE_CONTAINER_REGISTRY: sa2imut7hmo46cosureg.azurecr.io
-  AZURE_APP_SERVICE_NAME: sa2imut7hmo46-app
-  AZURE_RESOURCE_GROUP: techworkshop-l300-ai-agents-sweden
-  IMAGE_NAME: chat-app
+  AZURE_CONTAINER_REGISTRY: sa2imut7hmo46cosureg.azurecr.io  # Change if needed
+  IMAGE_NAME: chat-app                                       # Change if needed
 
 jobs:
   build-and-deploy:
@@ -20,10 +16,9 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-
-      - name: Create .env file from secret
-        run: |
-          echo "${{ secrets.ENV }}" > src/.env
+        # Remove `path: src` unless you NEED to checkout into a src folder:
+        # with:
+        #   path: src
 
       - name: Log in to Azure Container Registry
         uses: azure/docker-login@v1
@@ -34,9 +29,7 @@ jobs:
 
       - name: Build and push Docker image
         run: |
-          cd src/
-          docker build -t ${{ env.AZURE_CONTAINER_REGISTRY }}/${{ env.IMAGE_NAME }}:latest .
+          docker build \
+            --build-arg ENV_CONTENT="${{ secrets.ENV }}" \
+            -t ${{ env.AZURE_CONTAINER_REGISTRY }}/${{ env.IMAGE_NAME }}:latest .
           docker push ${{ env.AZURE_CONTAINER_REGISTRY }}/${{ env.IMAGE_NAME }}:latest
-
-      - name: Remove .env after build
-        run: rm -f src/.env
