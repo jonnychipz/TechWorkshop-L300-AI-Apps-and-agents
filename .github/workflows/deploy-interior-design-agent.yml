@@ -1,0 +1,176 @@
+name: Deploy Interior Design Agent
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'src/app/agents/interiorDesignAgent_initializer.py'
+      - 'src/prompts/InteriorDesignAgentPrompt.txt'
+      - 'src/app/tools/imageCreationTool.py'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'src/app/agents/interiorDesignAgent_initializer.py'
+      - 'src/prompts/InteriorDesignAgentPrompt.txt'
+      - 'src/app/tools/imageCreationTool.py'
+  workflow_dispatch:
+    inputs:
+      force_deploy:
+        description: 'Force deployment regardless of file changes'
+        required: false
+        default: false
+        type: boolean
+
+env:
+  PYTHON_VERSION: '3.12'
+  WORKING_DIRECTORY: './src'
+
+jobs:
+  deploy-interior-design-agent:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+          cache-dependency-path: 'src/requirements.txt'
+
+      - name: Create .env file from GitHub secrets
+        run: |
+          echo "${{ secrets.ENV }}" > src/.env
+        shell: bash
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+        working-directory: ${{ env.WORKING_DIRECTORY }}
+
+      - name: Authenticate to Azure
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Set Azure subscription
+        run: |
+          az account set --subscription ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Verify Azure AI Projects connection
+        run: |
+          python -c "
+          import os
+          from azure.ai.projects import AIProjectClient
+          from azure.identity import DefaultAzureCredential
+          from dotenv import load_dotenv
+          load_dotenv()
+          
+          print('Testing Azure AI Projects connection...')
+          endpoint = os.getenv('AZURE_AI_AGENT_ENDPOINT')
+          if not endpoint:
+              print('ERROR: AZURE_AI_AGENT_ENDPOINT not found in environment variables')
+              exit(1)
+          
+          try:
+              client = AIProjectClient(
+                  endpoint=endpoint,
+                  credential=DefaultAzureCredential()
+              )
+              print(f'Successfully connected to Azure AI Projects at: {endpoint}')
+          except Exception as e:
+              print(f'ERROR connecting to Azure AI Projects: {e}')
+              exit(1)
+          "
+        working-directory: ${{ env.WORKING_DIRECTORY }}
+
+      - name: Verify image creation tool dependencies
+        run: |
+          python -c "
+          import sys
+          sys.path.append('app')
+          try:
+              from tools.imageCreationTool import create_image
+              print('✅ Successfully imported create_image tool')
+              
+              # Test Azure OpenAI connection for image generation
+              import os
+              from dotenv import load_dotenv
+              load_dotenv()
+              
+              endpoint = os.getenv('AZURE_OPENAI_ENDPOINT')
+              api_key = os.getenv('AZURE_OPENAI_API_KEY')
+              
+              if not endpoint or not api_key:
+                  print('⚠️  Warning: Azure OpenAI credentials not found for image generation')
+              else:
+                  print('✅ Azure OpenAI credentials found for image generation')
+                  
+          except ImportError as e:
+              print(f'❌ Error importing create_image tool: {e}')
+              exit(1)
+          "
+        working-directory: ${{ env.WORKING_DIRECTORY }}
+
+      - name: Deploy Interior Design Agent
+        run: |
+          echo "Starting Interior Design Agent deployment..."
+          python app/agents/interiorDesignAgent_initializer.py
+        working-directory: ${{ env.WORKING_DIRECTORY }}
+        continue-on-error: false
+
+      - name: Verify agent deployment
+        run: |
+          python -c "
+          import os
+          from azure.ai.projects import AIProjectClient
+          from azure.identity import DefaultAzureCredential
+          from dotenv import load_dotenv
+          load_dotenv()
+          
+          print('Verifying agent deployment...')
+          endpoint = os.getenv('AZURE_AI_AGENT_ENDPOINT')
+          client = AIProjectClient(
+              endpoint=endpoint,
+              credential=DefaultAzureCredential()
+          )
+          
+          try:
+              with client:
+                  agents = client.agents.list_agents()
+                  design_agents = [agent for agent in agents if 'Interior Design Agent' in agent.name or 'Design Agent' in agent.name]
+                  
+                  if design_agents:
+                      print(f'✅ Found {len(design_agents)} Interior Design Agent(s):')
+                      for agent in design_agents:
+                          print(f'   - ID: {agent.id}, Name: {agent.name}')
+                  else:
+                      print('⚠️  No Interior Design Agents found')
+                      
+          except Exception as e:
+              print(f'Error verifying deployment: {e}')
+              exit(1)
+          "
+        working-directory: ${{ env.WORKING_DIRECTORY }}
+
+      - name: Clean up sensitive files
+        if: always()
+        run: |
+          rm -f src/.env
+        shell: bash
+
+      - name: Upload deployment logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        
+        with:
+          name: interior-design-agent-deployment-logs
+          path: |
+            src/*.log
+            src/app/agents/*.log
+          retention-days: 7

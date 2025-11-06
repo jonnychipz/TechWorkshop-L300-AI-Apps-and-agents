@@ -1,0 +1,161 @@
+name: Deploy Inventory Agent
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'src/app/agents/inventoryAgent_initializer.py'
+      - 'src/prompts/InventoryAgentPrompt.txt'
+      - 'src/app/tools/inventoryCheck.py'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'src/app/agents/inventoryAgent_initializer.py'
+      - 'src/prompts/InventoryAgentPrompt.txt'
+      - 'src/app/tools/inventoryCheck.py'
+  workflow_dispatch:
+    inputs:
+      force_deploy:
+        description: 'Force deployment regardless of file changes'
+        required: false
+        default: false
+        type: boolean
+
+env:
+  PYTHON_VERSION: '3.12'
+  WORKING_DIRECTORY: './src'
+
+jobs:
+  deploy-inventory-agent:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+          cache-dependency-path: 'src/requirements.txt'
+
+      - name: Create .env file from GitHub secrets
+        run: |
+          echo "${{ secrets.ENV }}" > src/.env
+        shell: bash
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+        working-directory: ${{ env.WORKING_DIRECTORY }}
+
+      - name: Authenticate to Azure
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Set Azure subscription
+        run: |
+          az account set --subscription ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Verify Azure AI Projects connection
+        run: |
+          python -c "
+          import os
+          from azure.ai.projects import AIProjectClient
+          from azure.identity import DefaultAzureCredential
+          from dotenv import load_dotenv
+          load_dotenv()
+          
+          print('Testing Azure AI Projects connection...')
+          endpoint = os.getenv('AZURE_AI_AGENT_ENDPOINT')
+          if not endpoint:
+              print('ERROR: AZURE_AI_AGENT_ENDPOINT not found in environment variables')
+              exit(1)
+          
+          try:
+              client = AIProjectClient(
+                  endpoint=endpoint,
+                  credential=DefaultAzureCredential()
+              )
+              print(f'Successfully connected to Azure AI Projects at: {endpoint}')
+          except Exception as e:
+              print(f'ERROR connecting to Azure AI Projects: {e}')
+              exit(1)
+          "
+        working-directory: ${{ env.WORKING_DIRECTORY }}
+
+      - name: Verify inventory tool dependencies
+        run: |
+          python -c "
+          import sys
+          sys.path.append('app')
+          try:
+              from tools.inventoryCheck import inventory_check
+              print('✅ Successfully imported inventory_check tool')
+          except ImportError as e:
+              print(f'❌ Error importing inventory_check tool: {e}')
+              exit(1)
+          "
+        working-directory: ${{ env.WORKING_DIRECTORY }}
+
+      - name: Deploy Inventory Agent
+        run: |
+          echo "Starting Inventory Agent deployment..."
+          python app/agents/inventoryAgent_initializer.py
+        working-directory: ${{ env.WORKING_DIRECTORY }}
+        continue-on-error: false
+
+      - name: Verify agent deployment
+        run: |
+          python -c "
+          import os
+          from azure.ai.projects import AIProjectClient
+          from azure.identity import DefaultAzureCredential
+          from dotenv import load_dotenv
+          load_dotenv()
+          
+          print('Verifying agent deployment...')
+          endpoint = os.getenv('AZURE_AI_AGENT_ENDPOINT')
+          client = AIProjectClient(
+              endpoint=endpoint,
+              credential=DefaultAzureCredential()
+          )
+          
+          try:
+              with client:
+                  agents = client.agents.list_agents()
+                  inventory_agents = [agent for agent in agents if 'Inventory Agent' in agent.name]
+                  
+                  if inventory_agents:
+                      print(f'✅ Found {len(inventory_agents)} Inventory Agent(s):')
+                      for agent in inventory_agents:
+                          print(f'   - ID: {agent.id}, Name: {agent.name}')
+                  else:
+                      print('⚠️  No Inventory Agents found')
+                      
+          except Exception as e:
+              print(f'Error verifying deployment: {e}')
+              exit(1)
+          "
+        working-directory: ${{ env.WORKING_DIRECTORY }}
+
+      - name: Clean up sensitive files
+        if: always()
+        run: |
+          rm -f src/.env
+        shell: bash
+
+      - name: Upload deployment logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: inventory-agent-deployment-logs
+          path: |
+            src/*.log
+            src/app/agents/*.log
+          retention-days: 7
