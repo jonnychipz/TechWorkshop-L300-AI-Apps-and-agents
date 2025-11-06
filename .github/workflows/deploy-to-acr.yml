@@ -26,10 +26,10 @@ jobs:
           login-server: ${{ env.AZURE_CONTAINER_REGISTRY }}
           username: ${{ secrets.ACR_USERNAME }}
           password: ${{ secrets.ACR_PASSWORD }}
-
+          
       - name: Build and push Docker image
-        run: |
-          docker build \
-            --build-arg ENV_CONTENT="${{ secrets.ENV }}" \
-            -t ${{ env.AZURE_CONTAINER_REGISTRY }}/${{ env.IMAGE_NAME }}:latest .
+         run: |
+          docker buildx build \
+          --build-arg ENV_CONTENT="${{ secrets.ENV }}" \
+          -t ${{ env.AZURE_CONTAINER_REGISTRY }}/${{ env.IMAGE_NAME }}:latest .
           docker push ${{ env.AZURE_CONTAINER_REGISTRY }}/${{ env.IMAGE_NAME }}:latest
